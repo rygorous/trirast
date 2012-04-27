@@ -25,7 +25,7 @@ private:
 	int canvasWBlocks;
 	int canvasHBlocks;
 	vector<PixelComponent> data;
-	vector<bool> block_full;
+	vector<unsigned char> block_full;
 
 	static double random()
 	{
@@ -56,16 +56,13 @@ public:
 
 		// clear
 		l = data.size();
+
 		for ( i = 3; i < l; i += 4 )
 		{
 			data[ i ] = 0;
 		}
 
-		l = block_full.size();
-		for ( i = 0; i < l; i++ )
-		{
-			block_full[i] = 0;
-		}
+    memset(&block_full[0], 0, block_full.size() * sizeof(block_full[0]));
 
 		// Draw 1000 triangles
 		for ( i = 0; i < 1000; i++ ) {
@@ -140,6 +137,12 @@ public:
     }
   };
 
+  void doBlock(int x0, int y0, int cy1, int cy2, int cy3, const Edge *e, float scale)
+  {
+    int q = blocksize;
+
+  }
+
 	void drawTriangle( double ax1, double ay1, Pixel color1, double ax2, double ay2, Pixel color2, double ax3, double ay3, Pixel color3 )
 	{
 		// http://devmaster.net/forums/topic/1145-advanced-rasterization/
@@ -174,106 +177,140 @@ public:
 
 		// Loop through blocks
 		int linestep = (canvasWidth - q) * 4;
-		double scale = 255.0 / (e[0].offs + e[1].offs + e[2].offs);
+		float scale = 255.0f / (e[0].offs + e[1].offs + e[2].offs);
 
-    int cyb1 = e[0].offs;
-    int cyb2 = e[1].offs;
-    int cyb3 = e[2].offs;
+    int cb1 = e[0].offs;
+    int cb2 = e[1].offs;
+    int cb3 = e[2].offs;
+    int qstep = -q;
+    int e1x = qstep*e[0].dy;
+    int e2x = qstep*e[1].dy;
+    int e3x = qstep*e[2].dy;
+    int x0 = minx;
 
-		for ( int y0 = miny; y0 < maxy; y0 += q, cyb1 += q*e[0].dx, cyb2 += q*e[1].dx, cyb3 += q*e[2].dx )
-		{
-      int cxb1 = cyb1;
-      int cxb2 = cyb2;
-      int cxb3 = cyb3;
+    for (int y0=miny; y0 < maxy; y0 += q)
+    {
+      // new block line - keep hunting for tri outer edge in old block line dir
+      while (x0 >= minx && x0 < maxx && cb1 >= e[0].nmax && cb2 >= e[1].nmax && cb3 >= e[2].nmax)
+      {
+        x0 += qstep;
+        cb1 += e1x;
+        cb2 += e2x;
+        cb3 += e3x;
+      }
 
-			for ( int x0 = minx; x0 < maxx; x0 += q, cxb1 += q*e[0].dy, cxb2 += q*e[1].dy, cxb3 += q*e[2].dy )
-			{
-				// Edge functions at top-left corner
-        int cy1 = cxb1;
-        int cy2 = cxb2;
-        int cy3 = cxb3;
+      // okay, we're now in a block we know is outside. reverse direction and go into main loop.
+      qstep = -qstep;
+      e1x = -e1x;
+      e2x = -e2x;
+      e3x = -e3x;
+      for (;;)
+      {
+        x0 += qstep;
+        cb1 += e1x;
+        cb2 += e2x;
+        cb3 += e3x;
 
-				// Skip block when at least one edge completely out
-				if (cy1 < e[0].nmax || cy2 < e[1].nmax || cy3 < e[2].nmax)
-					continue;
+        // We're done with this block row when at least one edge completely out
+        if (x0 < minx || x0 >= maxx)
+          break;
 
-				// Skip writing full block if it's already fully covered
-				int blockX = (x0 / q);
-				int blockY = (y0 / q);
-				int blockInd = blockX + blockY * canvasWBlocks;
-				if (block_full[blockInd])
-					continue;
+        // Skip block when at least one edge completely out
+        // If an edge function is too small and decreasing in the current traversal dir,
+        // we're done with this line.
+        if (cb1 < e[0].nmax) if (e1x < 0) break; else continue;
+        if (cb2 < e[1].nmax) if (e2x < 0) break; else continue;
+        if (cb3 < e[2].nmax) if (e3x < 0) break; else continue;
 
-				// Offset at top-left corner
-				int offset = (x0 + y0 * canvasWidth) * 4;
+        // We can skip this block if it's already fully covered
+		    int blockX = (x0 / q);
+		    int blockY = (y0 / q);
+		    int blockInd = blockX + blockY * canvasWBlocks;
+		    if (block_full[blockInd])
+          continue;
 
-				// Accept whole block when fully covered
-				if (cy1 >= e[0].nmin && cy2 >= e[1].nmin && cy3 >= e[2].nmin)
-				{
-					for ( int iy = 0; iy < q; iy ++ )
-					{
-						int cx1 = cy1;
-						int cx2 = cy2;
+		    // Offset at top-left corner
+		    int offset = (x0 + y0 * canvasWidth) * 4;
 
-						for ( int ix = 0; ix < q; ix ++ )
-						{
-							if (!data[offset + 3])
-							{
-								int u = (int)(cx1 * scale); // 0-255!
-								int v = (int)(cx2 * scale); // 0-255!
-								data[offset] = u;
-								data[offset + 1] = v;
-								data[offset + 2] = 0;
-								data[offset + 3] = 255;
-							}
+		    // Accept whole block when fully covered
+		    if (cb1 >= e[0].nmin && cb2 >= e[1].nmin && cb3 >= e[2].nmin)
+		    {
+          int cy1 = cb1;
+          int cy2 = cb2;
 
-							cx1 += e[0].dy;
-							cx2 += e[1].dy;
-							offset += 4;
-						}
+			    for ( int iy = 0; iy < q; iy ++ )
+			    {
+				    int cx1 = cy1;
+				    int cx2 = cy2;
 
-						cy1 += e[0].dx;
-						cy2 += e[1].dx;
-						offset += linestep;
-					}
+				    for ( int ix = 0; ix < q; ix ++ )
+				    {
+					    if (!data[offset + 3])
+					    {
+						    int u = (int)(cx1 * scale); // 0-255!
+						    int v = (int)(cx2 * scale); // 0-255!
+						    data[offset] = u;
+						    data[offset + 1] = v;
+						    data[offset + 2] = 0;
+						    data[offset + 3] = 255;
+					    }
 
-					block_full[blockInd] = true;
-				}
-				else
-				{
-					// Partially covered block
-					for ( int iy = 0; iy < q; iy ++ )
-					{
-						int cx1 = cy1;
-						int cx2 = cy2;
-						int cx3 = cy3;
+					    cx1 += e[0].dy;
+					    cx2 += e[1].dy;
+					    offset += 4;
+				    }
 
-						for ( int ix = 0; ix < q; ix ++ )
-						{
-							if ( (cx1 | cx2 | cx3) >= 0 && !data[offset+3])
-							{
-								int u = (int)(cx1 * scale); // 0-255!
-								int v = (int)(cx2 * scale); // 0-255!
-								data[offset] = u;
-								data[offset + 1] = v;
-								data[offset + 2] = 0;
-								data[offset + 3] = 255;
-							}
+				    cy1 += e[0].dx;
+				    cy2 += e[1].dx;
+				    offset += (canvasWidth - q) * 4;
+			    }
 
-							cx1 += e[0].dy;
-							cx2 += e[1].dy;
-							cx3 += e[2].dy;
-							offset += 4;
-						}
+			    block_full[blockInd] = true;
+		    }
+		    else
+		    {
+			    // Partially covered block
+          int cy1 = cb1;
+          int cy2 = cb2;
+          int cy3 = cb3;
 
-						cy1 += e[0].dx;
-						cy2 += e[1].dx;
-						cy3 += e[2].dx;
-						offset += linestep;
-					}
-				}
-			}
-		}
+			    for ( int iy = 0; iy < q; iy ++ )
+			    {
+				    int cx1 = cy1;
+				    int cx2 = cy2;
+				    int cx3 = cy3;
+
+				    for ( int ix = 0; ix < q; ix ++ )
+				    {
+					    if ( (cx1 | cx2 | cx3) >= 0 && !data[offset+3])
+					    {
+						    int u = (int)(cx1 * scale); // 0-255!
+						    int v = (int)(cx2 * scale); // 0-255!
+						    data[offset] = u;
+						    data[offset + 1] = v;
+						    data[offset + 2] = 0;
+						    data[offset + 3] = 255;
+					    }
+
+					    cx1 += e[0].dy;
+					    cx2 += e[1].dy;
+					    cx3 += e[2].dy;
+					    offset += 4;
+				    }
+
+				    cy1 += e[0].dx;
+				    cy2 += e[1].dx;
+				    cy3 += e[2].dx;
+				    offset += (canvasWidth - q) * 4;
+			    }
+		    }
+      }
+      
+      // advance to next row of blocks
+      cb1 += q*e[0].dx;
+      cb2 += q*e[1].dx;
+      cb3 += q*e[2].dx;
+    }
 	}
 
 	void saveAsTGA(const char* fileName)
