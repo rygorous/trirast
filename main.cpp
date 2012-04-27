@@ -121,13 +121,13 @@ public:
     int dx, dy, offs;
     int nmin, nmax;
 
-    void setup(int x1, int y1, int x2, int y2, int block)
+    void setup(int x1, int y1, int x2, int y2, int minx, int miny, int block)
     {
       dx = x1 - x2;
       dy = y2 - y1;
       
       // offset
-      offs = -dy*x1 - dx*y1;
+      offs = -dy*(x1 - minx) - dx*(y1 - miny);
       if (dy <= 0 && (dy != 0 || dx <= 0)) offs--;
       offs >>= 4;
 
@@ -167,26 +167,26 @@ public:
 		miny &= ~(q - 1);
 
     // Edges
-    Edge e12, e23, e31;
-    e12.setup(x1, y1, x2, y2, q);
-    e23.setup(x2, y2, x3, y3, q);
-    e31.setup(x3, y3, x1, y1, q);
+    Edge e[3];
+    e[0].setup(x1, y1, x2, y2, minx << 4, miny << 4, q);
+    e[1].setup(x2, y2, x3, y3, minx << 4, miny << 4, q);
+    e[2].setup(x3, y3, x1, y1, minx << 4, miny << 4, q);
 
 		// Loop through blocks
 		int linestep = (canvasWidth - q) * 4;
-		double scale = 255.0 / (e12.offs + e23.offs + e31.offs);
+		double scale = 255.0 / (e[0].offs + e[1].offs + e[2].offs);
 
-    int cyb1 = e12.offs + e12.dx * miny + e12.dy * minx;
-    int cyb2 = e23.offs + e23.dx * miny + e23.dy * minx;
-    int cyb3 = e31.offs + e31.dx * miny + e31.dy * minx;
+    int cyb1 = e[0].offs;
+    int cyb2 = e[1].offs;
+    int cyb3 = e[2].offs;
 
-		for ( int y0 = miny; y0 < maxy; y0 += q, cyb1 += q*e12.dx, cyb2 += q*e23.dx, cyb3 += q*e31.dx )
+		for ( int y0 = miny; y0 < maxy; y0 += q, cyb1 += q*e[0].dx, cyb2 += q*e[1].dx, cyb3 += q*e[2].dx )
 		{
       int cxb1 = cyb1;
       int cxb2 = cyb2;
       int cxb3 = cyb3;
 
-			for ( int x0 = minx; x0 < maxx; x0 += q, cxb1 += q*e12.dy, cxb2 += q*e23.dy, cxb3 += q*e31.dy )
+			for ( int x0 = minx; x0 < maxx; x0 += q, cxb1 += q*e[0].dy, cxb2 += q*e[1].dy, cxb3 += q*e[2].dy )
 			{
 				// Edge functions at top-left corner
         int cy1 = cxb1;
@@ -194,7 +194,7 @@ public:
         int cy3 = cxb3;
 
 				// Skip block when at least one edge completely out
-				if (cy1 < e12.nmax || cy2 < e23.nmax || cy3 < e31.nmax)
+				if (cy1 < e[0].nmax || cy2 < e[1].nmax || cy3 < e[2].nmax)
 					continue;
 
 				// Skip writing full block if it's already fully covered
@@ -208,7 +208,7 @@ public:
 				int offset = (x0 + y0 * canvasWidth) * 4;
 
 				// Accept whole block when fully covered
-				if (cy1 >= e12.nmin && cy2 >= e23.nmin && cy3 >= e31.nmin)
+				if (cy1 >= e[0].nmin && cy2 >= e[1].nmin && cy3 >= e[2].nmin)
 				{
 					for ( int iy = 0; iy < q; iy ++ )
 					{
@@ -227,13 +227,13 @@ public:
 								data[offset + 3] = 255;
 							}
 
-							cx1 += e12.dy;
-							cx2 += e23.dy;
+							cx1 += e[0].dy;
+							cx2 += e[1].dy;
 							offset += 4;
 						}
 
-						cy1 += e12.dx;
-						cy2 += e23.dx;
+						cy1 += e[0].dx;
+						cy2 += e[1].dx;
 						offset += linestep;
 					}
 
@@ -260,15 +260,15 @@ public:
 								data[offset + 3] = 255;
 							}
 
-							cx1 += e12.dy;
-							cx2 += e23.dy;
-							cx3 += e31.dy;
+							cx1 += e[0].dy;
+							cx2 += e[1].dy;
+							cx3 += e[2].dy;
 							offset += 4;
 						}
 
-						cy1 += e12.dx;
-						cy2 += e23.dx;
-						cy3 += e31.dx;
+						cy1 += e[0].dx;
+						cy2 += e[1].dx;
+						cy3 += e[2].dx;
 						offset += linestep;
 					}
 				}
