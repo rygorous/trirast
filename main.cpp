@@ -116,6 +116,21 @@ public:
 		}
 	}
 
+  struct Edge
+  {
+    int dx, dy, offs;
+
+    void setup(int x1, int y1, int x2, int y2)
+    {
+      dx = x1 - x2;
+      dy = y2 - y1;
+      
+      offs = -dy*x1 - dx*y1;
+      if (dy <= 0 && (dy != 0 || dx <= 0)) offs--;
+      offs >>= 4;
+    }
+  };
+
 	void drawTriangle( double ax1, double ay1, Pixel color1, double ax2, double ay2, Pixel color2, double ax3, double ay3, Pixel color3 )
 	{
 		// http://devmaster.net/forums/topic/1145-advanced-rasterization/
@@ -128,11 +143,6 @@ public:
 		int y1 = (int)( 16.0 * ay1 + 0.5 );
 		int y2 = (int)( 16.0 * ay2 + 0.5 );
 		int y3 = (int)( 16.0 * ay3 + 0.5 );
-
-		// Deltas
-		int dx12 = x1 - x2, dy12 = y2 - y1;
-		int dx23 = x2 - x3, dy23 = y3 - y2;
-		int dx31 = x3 - x1, dy31 = y1 - y3;
 
 		// Bounding rectangle
 		int minx = MAX( ( MIN( x1, MIN ( x2, x3 ) ) + 0xf ) >> 4, 0 );
@@ -147,49 +157,39 @@ public:
 		minx &= ~(q - 1);
 		miny &= ~(q - 1);
 
-		// Constant part of half-edge functions
-		int c1 = -dy12 * x1 - dx12 * y1;
-		int c2 = -dy23 * x2 - dx23 * y2;
-		int c3 = -dy31 * x3 - dx31 * y3;
-
-		// Correct for fill convention
-    if (dy12 <= 0 && (dy12 != 0 || dx12 <= 0)) c1--;
-    if (dy23 <= 0 && (dy23 != 0 || dx23 <= 0)) c2--;
-    if (dy31 <= 0 && (dy31 != 0 || dx31 <= 0)) c3--;
-
-		// Note this doesn't kill subpixel precision, but only because we test for >=0 (not >0).
-		// It's a bit subtle. :)
-    c1 >>= 4;
-    c2 >>= 4;
-    c3 >>= 4;
+    // Edges
+    Edge e12, e23, e31;
+    e12.setup(x1, y1, x2, y2);
+    e23.setup(x2, y2, x3, y3);
+    e31.setup(x3, y3, x1, y1);
 
 		// Set up min/max corners
 		int qm1 = q - 1; // for convenience
 		int nmin1 = 0, nmax1 = 0;
 		int nmin2 = 0, nmax2 = 0;
 		int nmin3 = 0, nmax3 = 0;
-		if (dx12 >= 0) nmax1 -= qm1*dx12; else nmin1 -= qm1*dx12;
-		if (dy12 >= 0) nmax1 -= qm1*dy12; else nmin1 -= qm1*dy12;
-		if (dx23 >= 0) nmax2 -= qm1*dx23; else nmin2 -= qm1*dx23;
-		if (dy23 >= 0) nmax2 -= qm1*dy23; else nmin2 -= qm1*dy23;
-		if (dx31 >= 0) nmax3 -= qm1*dx31; else nmin3 -= qm1*dx31;
-		if (dy31 >= 0) nmax3 -= qm1*dy31; else nmin3 -= qm1*dy31;
+		if (e12.dx >= 0) nmax1 -= qm1*e12.dx; else nmin1 -= qm1*e12.dx;
+		if (e12.dy >= 0) nmax1 -= qm1*e12.dy; else nmin1 -= qm1*e12.dy;
+		if (e23.dx >= 0) nmax2 -= qm1*e23.dx; else nmin2 -= qm1*e23.dx;
+		if (e23.dy >= 0) nmax2 -= qm1*e23.dy; else nmin2 -= qm1*e23.dy;
+		if (e31.dx >= 0) nmax3 -= qm1*e31.dx; else nmin3 -= qm1*e31.dx;
+		if (e31.dy >= 0) nmax3 -= qm1*e31.dy; else nmin3 -= qm1*e31.dy;
 
 		// Loop through blocks
 		int linestep = (canvasWidth - q) * 4;
-		double scale = 255.0 / (c1 + c2 + c3);
+		double scale = 255.0 / (e12.offs + e23.offs + e31.offs);
 
-    int cyb1 = c1 + dx12 * miny + dy12 * minx;
-    int cyb2 = c2 + dx23 * miny + dy23 * minx;
-    int cyb3 = c3 + dx31 * miny + dy31 * minx;
+    int cyb1 = e12.offs + e12.dx * miny + e12.dy * minx;
+    int cyb2 = e23.offs + e23.dx * miny + e23.dy * minx;
+    int cyb3 = e31.offs + e31.dx * miny + e31.dy * minx;
 
-		for ( int y0 = miny; y0 < maxy; y0 += q, cyb1 += q*dx12, cyb2 += q*dx23, cyb3 += q*dx31 )
+		for ( int y0 = miny; y0 < maxy; y0 += q, cyb1 += q*e12.dx, cyb2 += q*e23.dx, cyb3 += q*e31.dx )
 		{
       int cxb1 = cyb1;
       int cxb2 = cyb2;
       int cxb3 = cyb3;
 
-			for ( int x0 = minx; x0 < maxx; x0 += q, cxb1 += q*dy12, cxb2 += q*dy23, cxb3 += q*dy31 )
+			for ( int x0 = minx; x0 < maxx; x0 += q, cxb1 += q*e12.dy, cxb2 += q*e23.dy, cxb3 += q*e31.dy )
 			{
 				// Edge functions at top-left corner
         int cy1 = cxb1;
@@ -230,13 +230,13 @@ public:
 								data[offset + 3] = 255;
 							}
 
-							cx1 += dy12;
-							cx2 += dy23;
+							cx1 += e12.dy;
+							cx2 += e23.dy;
 							offset += 4;
 						}
 
-						cy1 += dx12;
-						cy2 += dx23;
+						cy1 += e12.dx;
+						cy2 += e23.dx;
 						offset += linestep;
 					}
 
@@ -263,15 +263,15 @@ public:
 								data[offset + 3] = 255;
 							}
 
-							cx1 += dy12;
-							cx2 += dy23;
-							cx3 += dy31;
+							cx1 += e12.dy;
+							cx2 += e23.dy;
+							cx3 += e31.dy;
 							offset += 4;
 						}
 
-						cy1 += dx12;
-						cy2 += dx23;
-						cy3 += dx31;
+						cy1 += e12.dx;
+						cy2 += e23.dx;
+						cy3 += e31.dx;
 						offset += linestep;
 					}
 				}
