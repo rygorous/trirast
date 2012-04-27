@@ -119,15 +119,24 @@ public:
   struct Edge
   {
     int dx, dy, offs;
+    int nmin, nmax;
 
-    void setup(int x1, int y1, int x2, int y2)
+    void setup(int x1, int y1, int x2, int y2, int block)
     {
       dx = x1 - x2;
       dy = y2 - y1;
       
+      // offset
       offs = -dy*x1 - dx*y1;
       if (dy <= 0 && (dy != 0 || dx <= 0)) offs--;
       offs >>= 4;
+
+      // min/max corners
+      nmin = nmax = 0;
+  		if (dx >= 0) nmax -= dx; else nmin -= dx;
+  		if (dy >= 0) nmax -= dy; else nmin -= dy;
+      nmin *= block-1;
+      nmax *= block-1;
     }
   };
 
@@ -159,21 +168,9 @@ public:
 
     // Edges
     Edge e12, e23, e31;
-    e12.setup(x1, y1, x2, y2);
-    e23.setup(x2, y2, x3, y3);
-    e31.setup(x3, y3, x1, y1);
-
-		// Set up min/max corners
-		int qm1 = q - 1; // for convenience
-		int nmin1 = 0, nmax1 = 0;
-		int nmin2 = 0, nmax2 = 0;
-		int nmin3 = 0, nmax3 = 0;
-		if (e12.dx >= 0) nmax1 -= qm1*e12.dx; else nmin1 -= qm1*e12.dx;
-		if (e12.dy >= 0) nmax1 -= qm1*e12.dy; else nmin1 -= qm1*e12.dy;
-		if (e23.dx >= 0) nmax2 -= qm1*e23.dx; else nmin2 -= qm1*e23.dx;
-		if (e23.dy >= 0) nmax2 -= qm1*e23.dy; else nmin2 -= qm1*e23.dy;
-		if (e31.dx >= 0) nmax3 -= qm1*e31.dx; else nmin3 -= qm1*e31.dx;
-		if (e31.dy >= 0) nmax3 -= qm1*e31.dy; else nmin3 -= qm1*e31.dy;
+    e12.setup(x1, y1, x2, y2, q);
+    e23.setup(x2, y2, x3, y3, q);
+    e31.setup(x3, y3, x1, y1, q);
 
 		// Loop through blocks
 		int linestep = (canvasWidth - q) * 4;
@@ -197,7 +194,7 @@ public:
         int cy3 = cxb3;
 
 				// Skip block when at least one edge completely out
-				if (cy1 < nmax1 || cy2 < nmax2 || cy3 < nmax3)
+				if (cy1 < e12.nmax || cy2 < e23.nmax || cy3 < e31.nmax)
 					continue;
 
 				// Skip writing full block if it's already fully covered
@@ -211,7 +208,7 @@ public:
 				int offset = (x0 + y0 * canvasWidth) * 4;
 
 				// Accept whole block when fully covered
-				if (cy1 >= nmin1 && cy2 >= nmin2 && cy3 >= nmin3)
+				if (cy1 >= e12.nmin && cy2 >= e23.nmin && cy3 >= e31.nmin)
 				{
 					for ( int iy = 0; iy < q; iy ++ )
 					{
