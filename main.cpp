@@ -18,6 +18,7 @@ typedef unsigned int Pixel;
 #define MIN(x,y) ((x)<(y)?(x):(y))
 #define MAX(x,y) ((x)>(y)?(x):(y))
 
+#define USE_SIMD
 
 class CApp {
 private:
@@ -149,6 +150,10 @@ public:
     float fixscale;
     int dudx, dudy;
     int dvdx, dvdy;
+#ifdef USE_SIMD
+    __m128i mu_initstep, mv_initstep;
+    __m128i deltas;
+#endif
 
     void setup(const Edge *e, float scale)
     {
@@ -157,6 +162,16 @@ public:
       dudy = (int) (e[0].dxline * fixscale);
       dvdx = (int) (e[1].dy * fixscale);
       dvdy = (int) (e[1].dxline * fixscale);
+
+#ifdef USE_SIMD
+      __m128i step0123 = _mm_set_epi32(3, 2, 1, 0);
+      mu_initstep = _mm_mullo_epi32(step0123, _mm_set1_epi32(dudx));
+      mv_initstep = _mm_mullo_epi32(step0123, _mm_set1_epi32(dvdx));
+      deltas.m128i_i32[0] = dudx << 2;
+      deltas.m128i_i32[1] = dvdx << 2;
+      deltas.m128i_i32[2] = dudy;
+      deltas.m128i_i32[3] = dvdy;
+#endif
     }
   };
 
@@ -168,7 +183,7 @@ public:
     unsigned char *ptr = &data[offset];
     int linestep = canvasStride - blocksize*4;
 
-#if 0
+#ifndef USE_SIMD
 		for ( int iy = 0; iy < blocksize; iy ++ )
 		{
 			for ( int ix = 0; ix < blocksize; ix ++ )
@@ -191,13 +206,12 @@ public:
 			ptr += linestep;
 		}
 #else
-    __m128i step0123 = _mm_set_epi32(3, 2, 1, 0);
-    __m128i mu = _mm_add_epi32(_mm_set1_epi32(u), _mm_mullo_epi32(step0123, _mm_set1_epi32(s.dudx)));
-    __m128i mv = _mm_add_epi32(_mm_set1_epi32(v), _mm_mullo_epi32(step0123, _mm_set1_epi32(s.dvdx)));
-    __m128i mdudx = _mm_slli_epi32(_mm_set1_epi32(s.dudx), 2);
-    __m128i mdvdx = _mm_slli_epi32(_mm_set1_epi32(s.dvdx), 2);
-    __m128i mdudy = _mm_set1_epi32(s.dudy);
-    __m128i mdvdy = _mm_set1_epi32(s.dvdy);
+    __m128i mu = _mm_add_epi32(_mm_set1_epi32(u), s.mu_initstep);
+    __m128i mv = _mm_add_epi32(_mm_set1_epi32(v), s.mv_initstep);
+    __m128i mdudx = _mm_shuffle_epi32(s.deltas, 0x00);
+    __m128i mdvdx = _mm_shuffle_epi32(s.deltas, 0x55);
+    __m128i mdudy = _mm_shuffle_epi32(s.deltas, 0xaa);
+    __m128i mdvdy = _mm_shuffle_epi32(s.deltas, 0xff);
 
     for (int iy=0; iy < blocksize; iy++)
     {
