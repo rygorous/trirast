@@ -110,6 +110,7 @@ public:
   struct Edge
   {
     int dx, dy, offs;
+    int dxline;
     int nmin, nmax;
 
     void setup(int x1, int y1, int x2, int y2, int minx, int miny, int block)
@@ -117,6 +118,8 @@ public:
       dx = x1 - x2;
       dy = y2 - y1;
       
+      dxline = dx - block*dy;
+
       // offset
       offs = -dy*(x1 - minx) - dx*(y1 - miny);
       if (dy <= 0 && (dy != 0 || dx <= 0)) offs--;
@@ -141,16 +144,27 @@ public:
     }
   }
 
-  template<bool masked>
-  void solidBlock(int offset, int c1, int c2, int c3, const Edge *e, float scale)
+  struct SolidSetup
   {
-    float fixscale = scale * 65536;
-    int u = (int) (c1 * fixscale);
-    int dudx = (int) (e[0].dy * fixscale);
-    int dudy = (int) (e[0].dx * fixscale) - blocksize*dudx;
-    int v = (int) (c2 * fixscale);
-    int dvdx = (int) (e[1].dy * fixscale);
-    int dvdy = (int) (e[1].dx * fixscale) - blocksize*dvdx;
+    float fixscale;
+    int dudx, dudy;
+    int dvdx, dvdy;
+
+    void setup(const Edge *e, float scale)
+    {
+      fixscale = scale * 65536;
+      dudx = (int) (e[0].dy * fixscale);
+      dudy = (int) (e[0].dxline * fixscale);
+      dvdx = (int) (e[1].dy * fixscale);
+      dvdy = (int) (e[1].dxline * fixscale);
+    }
+  };
+
+  template<bool masked>
+  void solidBlock(int offset, int c1, int c2, int c3, const SolidSetup &s)
+  {
+    int u = (int) (c1 * s.fixscale);
+    int v = (int) (c2 * s.fixscale);
     unsigned char *ptr = &data[offset];
     int linestep = canvasStride - blocksize*4;
 
@@ -167,23 +181,23 @@ public:
 					ptr[3] = 255;
 				}
 
-        u += dudx;
-        v += dvdx;
+        u += s.dudx;
+        v += s.dvdx;
         ptr += 4;
 			}
 
-      u += dudy;
-      v += dvdy;
+      u += s.dudy;
+      v += s.dvdy;
 			ptr += linestep;
 		}
 #else
     __m128i step0123 = _mm_set_epi32(3, 2, 1, 0);
-    __m128i mu = _mm_add_epi32(_mm_set1_epi32(u), _mm_mullo_epi32(step0123, _mm_set1_epi32(dudx)));
-    __m128i mv = _mm_add_epi32(_mm_set1_epi32(v), _mm_mullo_epi32(step0123, _mm_set1_epi32(dvdx)));
-    __m128i mdudx = _mm_slli_epi32(_mm_set1_epi32(dudx), 2);
-    __m128i mdvdx = _mm_slli_epi32(_mm_set1_epi32(dvdx), 2);
-    __m128i mdudy = _mm_set1_epi32(dudy);
-    __m128i mdvdy = _mm_set1_epi32(dvdy);
+    __m128i mu = _mm_add_epi32(_mm_set1_epi32(u), _mm_mullo_epi32(step0123, _mm_set1_epi32(s.dudx)));
+    __m128i mv = _mm_add_epi32(_mm_set1_epi32(v), _mm_mullo_epi32(step0123, _mm_set1_epi32(s.dvdx)));
+    __m128i mdudx = _mm_slli_epi32(_mm_set1_epi32(s.dudx), 2);
+    __m128i mdvdx = _mm_slli_epi32(_mm_set1_epi32(s.dvdx), 2);
+    __m128i mdudy = _mm_set1_epi32(s.dudy);
+    __m128i mdvdy = _mm_set1_epi32(s.dvdy);
 
     for (int iy=0; iy < blocksize; iy++)
     {
@@ -226,9 +240,9 @@ public:
     int pix1 = e[0].dy;
     int pix2 = e[1].dy;
     int pix3 = e[2].dy;
-    int line1 = e[0].dx - blocksize*pix1;
-    int line2 = e[1].dx - blocksize*pix2;
-    int line3 = e[2].dx - blocksize*pix3;
+    int line1 = e[0].dxline;
+    int line2 = e[1].dxline;
+    int line3 = e[2].dxline;
     unsigned char *ptr = &data[offset];
     int linestep = canvasStride - blocksize*4;
 
@@ -358,9 +372,13 @@ public:
     e[1].setup(x2, y2, x3, y3, minx << 4, miny << 4, q);
     e[2].setup(x3, y3, x1, y1, minx << 4, miny << 4, q);
 
+    // Block setup
+		float scale = 255.0f / (e[0].offs + e[1].offs + e[2].offs);
+    SolidSetup solid;
+    solid.setup(e, scale);
+
 		// Loop through blocks
 		int linestep = canvasStride - q*4;
-		float scale = 255.0f / (e[0].offs + e[1].offs + e[2].offs);
 
     int cb1 = e[0].offs;
     int cb2 = e[1].offs;
@@ -421,9 +439,9 @@ public:
 		    {
           block_state[blockInd] = BLOCK_SOLID;
           if (state & BLOCK_NEEDCLEAR)
-            solidBlock<false>(offset, cb1, cb2, cb3, e, scale);
+            solidBlock<false>(offset, cb1, cb2, cb3, solid);
           else
-            solidBlock<true>(offset, cb1, cb2, cb3, e, scale);
+            solidBlock<true>(offset, cb1, cb2, cb3, solid);
 		    }
 		    else
         {
