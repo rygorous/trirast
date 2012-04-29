@@ -6,6 +6,8 @@
 #include <iostream>
 #include <fstream>
 
+#include <xmmintrin.h>
+
 #include <Windows.h>
 
 using namespace std;
@@ -19,12 +21,14 @@ typedef unsigned int Pixel;
 
 class CApp {
 private:
-	static const int blocksize = 8;
+  static const int blocklog2 = 3;
+	static const int blocksize = 1 << blocklog2;
 	int canvasWidth;
 	int canvasHeight;
+  int canvasStride;
 	int canvasWBlocks;
 	int canvasHBlocks;
-	vector<PixelComponent> data;
+  PixelComponent *data;
 	vector<unsigned char> block_full;
 
 	static double random()
@@ -43,29 +47,34 @@ public:
 	{
 		canvasWidth = 1024;
 		canvasHeight = 512;
-		data.resize(canvasWidth * canvasHeight * 4);
+    canvasStride = ((canvasWidth + 3) & ~3) * 4; // in bytes!
+    data = (PixelComponent *)_aligned_malloc(canvasStride * canvasHeight, 16);
 
 		canvasWBlocks = (canvasWidth + blocksize-1) / blocksize;
 		canvasHBlocks = (canvasHeight + blocksize-1) / blocksize;
 		block_full.resize(canvasWBlocks * canvasHBlocks);
 	}
 
+  ~CApp()
+  {
+    _aligned_free(data);
+  }
+
 	void render()
 	{
 		int i, l;
 
 		// clear
-		l = data.size();
-
-		for ( i = 3; i < l; i += 4 )
-		{
-			data[ i ] = 0;
-		}
+    l = canvasStride * canvasHeight;
+    for ( i = 3; i < l; i += 4 )
+    {
+      data[ i ] = 0;
+    }
 
     memset(&block_full[0], 0, block_full.size() * sizeof(block_full[0]));
 
 		// Draw 1000 triangles
-		for ( i = 0; i < 1000; i++ ) {
+		for ( i = 0; i < 100; i++ ) {
 			drawTriangle(
 						random() * canvasWidth,
 						random() * canvasHeight,
@@ -77,39 +86,6 @@ public:
 						random() * canvasHeight,
 						(Pixel)(random() * 0xffffff)
 						);
-		}
-	}
-
-	void drawPixel( int x, int y, PixelComponent r, PixelComponent g, PixelComponent b )
-	{
-		int offset = ( x + y * canvasWidth ) * 4;
-
-		if ( data[ offset + 3 ] )
-			return;
-
-		data[ offset ] = r;
-		data[ offset + 1 ] = g;
-		data[ offset + 2 ] = b;
-		data[ offset + 3 ] = 255;
-	}
-
-	void drawRectangle( double x1, double y1, double x2, double y2, Pixel color )
-	{
-		PixelComponent r = color >> 16 & 255;
-		PixelComponent g = color >> 8 & 255;
-		PixelComponent b = color & 255;
-
-		int xmin = (int)(MIN( x1, x2 ));
-		int xmax = (int)(MAX( x1, x2 ));
-		int ymin = (int)(MIN( y1, y2 ));
-		int ymax = (int)(MAX( y1, y2 ));
-
-		for ( int y = ymin; y < ymax; y ++ )
-		{
-			for ( int x = xmin; x < xmax; x ++ )
-			{
-				drawPixel( x, y, r, g, b );
-			}
 		}
 	}
 
@@ -137,10 +113,183 @@ public:
     }
   };
 
-  void doBlock(int x0, int y0, int cy1, int cy2, int cy3, const Edge *e, float scale)
+  void solidBlock(int offset, int c1, int c2, int c3, const Edge *e, float scale)
   {
-    int q = blocksize;
+    float fixscale = scale * 65536;
+    int u = (int) (c1 * fixscale);
+    int dudx = (int) (e[0].dy * fixscale);
+    int dudy = (int) (e[0].dx * fixscale) - blocksize*dudx;
+    int v = (int) (c2 * fixscale);
+    int dvdx = (int) (e[1].dy * fixscale);
+    int dvdy = (int) (e[1].dx * fixscale) - blocksize*dvdx;
+    unsigned char *ptr = &data[offset];
+    int linestep = canvasStride - blocksize*4;
 
+#if 0
+		for ( int iy = 0; iy < blocksize; iy ++ )
+		{
+			for ( int ix = 0; ix < blocksize; ix ++ )
+			{
+				if (!ptr[3])
+				{
+					ptr[0] = u >> 16;
+					ptr[1] = v >> 16;
+					ptr[2] = 0;
+					ptr[3] = 255;
+				}
+
+        u += dudx;
+        v += dvdx;
+        ptr += 4;
+			}
+
+      u += dudy;
+      v += dvdy;
+			ptr += linestep;
+		}
+#else
+    __m128i step0123 = _mm_set_epi32(3, 2, 1, 0);
+    __m128i mu = _mm_add_epi32(_mm_set1_epi32(u), _mm_mullo_epi32(step0123, _mm_set1_epi32(dudx)));
+    __m128i mv = _mm_add_epi32(_mm_set1_epi32(v), _mm_mullo_epi32(step0123, _mm_set1_epi32(dvdx)));
+    __m128i mdudx = _mm_slli_epi32(_mm_set1_epi32(dudx), 2);
+    __m128i mdvdx = _mm_slli_epi32(_mm_set1_epi32(dvdx), 2);
+    __m128i mdudy = _mm_set1_epi32(dudy);
+    __m128i mdvdy = _mm_set1_epi32(dvdy);
+
+    for (int iy=0; iy < blocksize; iy++)
+    {
+      for (int ix=0; ix < blocksize/4; ix++)
+      {
+        __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
+        __m128i curalpha = _mm_srli_epi32(curpixel, 24); // alpha only
+        __m128i mwrite = _mm_cmpeq_epi32(curalpha, _mm_setzero_si128());
+
+        __m128i ushift = _mm_srli_epi32(mu, 16);
+        __m128i vshift = _mm_srli_epi32(mv, 16);
+
+        __m128i pix0 = _mm_or_si128(ushift, _mm_slli_epi32(vshift, 8));
+        __m128i pix1 = _mm_or_si128(pix0, _mm_set1_epi32(0xff000000));
+
+        __m128i merge0 = _mm_and_si128(pix1, mwrite);
+        __m128i merge1 = _mm_andnot_si128(mwrite, curpixel);
+        __m128i merged = _mm_or_si128(merge0, merge1);
+        _mm_store_si128((__m128i *)ptr, merged);
+
+        mu = _mm_add_epi32(mu, mdudx);
+        mv = _mm_add_epi32(mv, mdvdx);
+        ptr += 4*4;
+      }
+
+      mu = _mm_add_epi32(mu, mdudy);
+      mv = _mm_add_epi32(mv, mdvdy);
+      ptr += linestep;
+    }
+#endif
+  }
+
+  void partialBlock(int offset, int c1, int c2, int c3, const Edge *e, float scale)
+  {
+    int pix1 = e[0].dy;
+    int pix2 = e[1].dy;
+    int pix3 = e[2].dy;
+    int line1 = e[0].dx - blocksize*pix1;
+    int line2 = e[1].dx - blocksize*pix2;
+    int line3 = e[2].dx - blocksize*pix3;
+    unsigned char *ptr = &data[offset];
+    int linestep = canvasStride - blocksize*4;
+
+#if 0
+    for (int iy=0; iy < blocksize; iy++)
+    {
+      for (int ix=0; ix < blocksize; ix++)
+      {
+        if ((c1 | c2 | c3) >= 0 && !ptr[3])
+        {
+					int u = (int)(c1 * scale); // 0-255!
+					int v = (int)(c2 * scale); // 0-255!
+					ptr[0] = u;
+					ptr[1] = v;
+					ptr[2] = 0;
+					ptr[3] = 255;
+        }
+
+        c1 += pix1;
+        c2 += pix2;
+        c3 += pix3;
+        ptr += 4;
+      }
+
+      c1 += line1;
+      c2 += line2;
+      c3 += line3;
+      ptr += linestep;
+    }
+#else
+    __m128i mc1 = _mm_set1_epi32(c1);
+    __m128i mc2 = _mm_set1_epi32(c2);
+    __m128i mc3 = _mm_set1_epi32(c3);
+    __m128i mpix1 = _mm_set1_epi32(pix1);
+    __m128i mpix2 = _mm_set1_epi32(pix2);
+    __m128i mpix3 = _mm_set1_epi32(pix3);
+    __m128i mline1 = _mm_set1_epi32(line1);
+    __m128i mline2 = _mm_set1_epi32(line2);
+    __m128i mline3 = _mm_set1_epi32(line3);
+
+    __m128i step0123 = _mm_set_epi32(3, 2, 1, 0);
+    mc1 = _mm_add_epi32(mc1, _mm_mullo_epi32(mpix1, step0123));
+    mc2 = _mm_add_epi32(mc2, _mm_mullo_epi32(mpix2, step0123));
+    mc3 = _mm_add_epi32(mc3, _mm_mullo_epi32(mpix3, step0123));
+    mpix1 = _mm_slli_epi32(mpix1, 2);
+    mpix2 = _mm_slli_epi32(mpix2, 2);
+    mpix3 = _mm_slli_epi32(mpix3, 2);
+
+    // we can convert these to floating point. this is exact for fairly subtle reasons.
+    __m128 mc1f = _mm_cvtepi32_ps(mc1);
+    __m128 mc2f = _mm_cvtepi32_ps(mc2);
+    __m128 mpix1f = _mm_cvtepi32_ps(mpix1);
+    __m128 mpix2f = _mm_cvtepi32_ps(mpix2);
+    __m128 mline1f = _mm_cvtepi32_ps(mline1);
+    __m128 mline2f = _mm_cvtepi32_ps(mline2);
+
+    __m128 mscale = _mm_set1_ps(scale);
+
+    for (int iy=0; iy < blocksize; iy++)
+    {
+      for (int ix=0; ix < blocksize/4; ix++)
+      {
+        __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
+        __m128i curalpha = _mm_srli_epi32(curpixel, 24);
+        __m128i mwrite = _mm_cmpeq_epi32(curalpha, _mm_setzero_si128());
+
+        __m128i csigns = _mm_or_si128(_mm_castps_si128(_mm_or_ps(mc1f, mc2f)), mc3);
+        mwrite = _mm_andnot_si128(csigns, mwrite);
+        mwrite = _mm_srai_epi32(mwrite, 31);
+
+        __m128 c1fs = _mm_mul_ps(mc1f, mscale);
+        __m128 c2fs = _mm_mul_ps(mc2f, mscale);
+        __m128i mu = _mm_cvttps_epi32(c1fs);
+        __m128i mv = _mm_cvttps_epi32(c2fs);
+
+        __m128i pix0 = _mm_or_si128(mu, _mm_slli_epi32(mv, 8));
+        __m128i pix1 = _mm_or_si128(pix0, _mm_set1_epi32(0xff000000));
+
+        __m128i merge0 = _mm_and_si128(pix1, mwrite);
+        __m128i merge1 = _mm_andnot_si128(mwrite, curpixel);
+        __m128i merged = _mm_or_si128(merge0, merge1);
+        _mm_store_si128((__m128i *)ptr, merged);
+
+        mc1f = _mm_add_ps(mc1f, mpix1f);
+        mc2f = _mm_add_ps(mc2f, mpix2f);
+        mc3 = _mm_add_epi32(mc3, mpix3);
+        ptr += 4*4;
+      }
+
+      mc1f = _mm_add_ps(mc1f, mline1f);
+      mc2f = _mm_add_ps(mc2f, mline2f);
+      mc3 = _mm_add_epi32(mc3, mline3);
+      ptr += linestep;
+    }
+#endif
   }
 
 	void drawTriangle( double ax1, double ay1, Pixel color1, double ax2, double ay2, Pixel color2, double ax3, double ay3, Pixel color3 )
@@ -176,7 +325,7 @@ public:
     e[2].setup(x3, y3, x1, y1, minx << 4, miny << 4, q);
 
 		// Loop through blocks
-		int linestep = (canvasWidth - q) * 4;
+		int linestep = canvasStride - q*4;
 		float scale = 255.0f / (e[0].offs + e[1].offs + e[2].offs);
 
     int cb1 = e[0].offs;
@@ -230,80 +379,16 @@ public:
           continue;
 
 		    // Offset at top-left corner
-		    int offset = (x0 + y0 * canvasWidth) * 4;
+		    int offset = x0*4 + y0*canvasStride;
 
 		    // Accept whole block when fully covered
 		    if (cb1 >= e[0].nmin && cb2 >= e[1].nmin && cb3 >= e[2].nmin)
 		    {
-          int cy1 = cb1;
-          int cy2 = cb2;
-
-			    for ( int iy = 0; iy < q; iy ++ )
-			    {
-				    int cx1 = cy1;
-				    int cx2 = cy2;
-
-				    for ( int ix = 0; ix < q; ix ++ )
-				    {
-					    if (!data[offset + 3])
-					    {
-						    int u = (int)(cx1 * scale); // 0-255!
-						    int v = (int)(cx2 * scale); // 0-255!
-						    data[offset] = u;
-						    data[offset + 1] = v;
-						    data[offset + 2] = 0;
-						    data[offset + 3] = 255;
-					    }
-
-					    cx1 += e[0].dy;
-					    cx2 += e[1].dy;
-					    offset += 4;
-				    }
-
-				    cy1 += e[0].dx;
-				    cy2 += e[1].dx;
-				    offset += (canvasWidth - q) * 4;
-			    }
-
-			    block_full[blockInd] = true;
+			    block_full[blockInd] = 1;
+          solidBlock(offset, cb1, cb2, cb3, e, scale);
 		    }
 		    else
-		    {
-			    // Partially covered block
-          int cy1 = cb1;
-          int cy2 = cb2;
-          int cy3 = cb3;
-
-			    for ( int iy = 0; iy < q; iy ++ )
-			    {
-				    int cx1 = cy1;
-				    int cx2 = cy2;
-				    int cx3 = cy3;
-
-				    for ( int ix = 0; ix < q; ix ++ )
-				    {
-					    if ( (cx1 | cx2 | cx3) >= 0 && !data[offset+3])
-					    {
-						    int u = (int)(cx1 * scale); // 0-255!
-						    int v = (int)(cx2 * scale); // 0-255!
-						    data[offset] = u;
-						    data[offset + 1] = v;
-						    data[offset + 2] = 0;
-						    data[offset + 3] = 255;
-					    }
-
-					    cx1 += e[0].dy;
-					    cx2 += e[1].dy;
-					    cx3 += e[2].dy;
-					    offset += 4;
-				    }
-
-				    cy1 += e[0].dx;
-				    cy2 += e[1].dx;
-				    cy3 += e[2].dx;
-				    offset += (canvasWidth - q) * 4;
-			    }
-		    }
+          partialBlock(offset, cb1, cb2, cb3, e, scale);
       }
       
       // advance to next row of blocks
@@ -328,7 +413,8 @@ public:
 		// Write file
 		ofstream of(fileName, ios_base::out | ios_base::binary);
 		of.write((const char*)hdr, 18);
-		of.write((const char*)&data[0], data.size());
+    for (int i=0; i < canvasHeight; i++)
+		  of.write((const char*)&data[i*canvasStride], canvasWidth*4);
 		of.close();
 	}
 };
