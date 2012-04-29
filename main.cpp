@@ -29,7 +29,11 @@ private:
 	int canvasWBlocks;
 	int canvasHBlocks;
   PixelComponent *data;
-	vector<unsigned char> block_full;
+	vector<unsigned char> block_state;
+
+  static const int BLOCK_ISCLEAR    = 1 << 0;
+  static const int BLOCK_NEEDCLEAR  = 1 << 1;
+  static const int BLOCK_SOLID      = 1 << 2;
 
 	static double random()
 	{
@@ -49,10 +53,12 @@ public:
 		canvasHeight = 512;
     canvasStride = ((canvasWidth + 3) & ~3) * 4; // in bytes!
     data = (PixelComponent *)_aligned_malloc(canvasStride * canvasHeight, 16);
+    memset(data, 0, canvasStride * canvasHeight);
 
 		canvasWBlocks = (canvasWidth + blocksize-1) / blocksize;
 		canvasHBlocks = (canvasHeight + blocksize-1) / blocksize;
-		block_full.resize(canvasWBlocks * canvasHBlocks);
+		block_state.resize(canvasWBlocks * canvasHBlocks);
+    memset(&block_state[0], BLOCK_ISCLEAR, block_state.size());
 	}
 
   ~CApp()
@@ -62,19 +68,12 @@ public:
 
 	void render()
 	{
-		int i, l;
-
-		// clear
-    l = canvasStride * canvasHeight;
-    for ( i = 3; i < l; i += 4 )
-    {
-      data[ i ] = 0;
-    }
-
-    memset(&block_full[0], 0, block_full.size() * sizeof(block_full[0]));
+    // set block state for clearing
+    for (int i=0; i < block_state.size(); i++)
+      block_state[i] = (block_state[i] & BLOCK_ISCLEAR) ? BLOCK_ISCLEAR : BLOCK_NEEDCLEAR;
 
 		// Draw 1000 triangles
-		for ( i = 0; i < 100; i++ ) {
+		for (int i = 0; i < 100; i++) {
 			drawTriangle(
 						random() * canvasWidth,
 						random() * canvasHeight,
@@ -87,7 +86,26 @@ public:
 						(Pixel)(random() * 0xffffff)
 						);
 		}
+
+    // clear remaining blocks that need clearing
+    performClear();
 	}
+
+  void performClear()
+  {
+    for (int y=0; y < canvasHBlocks; y++)
+    {
+      for (int x=0; x < canvasWBlocks; x++)
+      {
+        int ind = y*canvasWBlocks + x;
+        if (block_state[ind] & BLOCK_NEEDCLEAR)
+        {
+          clearBlock(y*blocksize*canvasStride + x*blocksize*4);
+          block_state[ind] = BLOCK_ISCLEAR;
+        }
+      }
+    }
+  }
 
   struct Edge
   {
@@ -113,6 +131,17 @@ public:
     }
   };
 
+  void clearBlock(int offset)
+  {
+    unsigned char *ptr = &data[offset];
+    for (int iy=0; iy < blocksize; iy++)
+    {
+      memset(ptr, 0, blocksize*4);
+      ptr += canvasStride;
+    }
+  }
+
+  template<bool masked>
   void solidBlock(int offset, int c1, int c2, int c3, const Edge *e, float scale)
   {
     float fixscale = scale * 65536;
@@ -130,7 +159,7 @@ public:
 		{
 			for ( int ix = 0; ix < blocksize; ix ++ )
 			{
-				if (!ptr[3])
+				if (!masked || !ptr[3])
 				{
 					ptr[0] = u >> 16;
 					ptr[1] = v >> 16;
@@ -160,20 +189,25 @@ public:
     {
       for (int ix=0; ix < blocksize/4; ix++)
       {
-        __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
-        __m128i curalpha = _mm_srli_epi32(curpixel, 24); // alpha only
-        __m128i mwrite = _mm_cmpeq_epi32(curalpha, _mm_setzero_si128());
-
         __m128i ushift = _mm_srli_epi32(mu, 16);
         __m128i vshift = _mm_srli_epi32(mv, 16);
 
         __m128i pix0 = _mm_or_si128(ushift, _mm_slli_epi32(vshift, 8));
         __m128i pix1 = _mm_or_si128(pix0, _mm_set1_epi32(0xff000000));
 
-        __m128i merge0 = _mm_and_si128(pix1, mwrite);
-        __m128i merge1 = _mm_andnot_si128(mwrite, curpixel);
-        __m128i merged = _mm_or_si128(merge0, merge1);
-        _mm_store_si128((__m128i *)ptr, merged);
+        if (masked)
+        {
+          __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
+          __m128i curalpha = _mm_srli_epi32(curpixel, 24); // alpha only
+          __m128i mwrite = _mm_cmpeq_epi32(curalpha, _mm_setzero_si128());
+
+          __m128i merge0 = _mm_and_si128(pix1, mwrite);
+          __m128i merge1 = _mm_andnot_si128(mwrite, curpixel);
+          __m128i merged = _mm_or_si128(merge0, merge1);
+          _mm_store_si128((__m128i *)ptr, merged);
+        }
+        else
+          _mm_store_si128((__m128i *)ptr, pix1);
 
         mu = _mm_add_epi32(mu, mdudx);
         mv = _mm_add_epi32(mv, mdvdx);
@@ -375,7 +409,8 @@ public:
 		    int blockX = (x0 / q);
 		    int blockY = (y0 / q);
 		    int blockInd = blockX + blockY * canvasWBlocks;
-		    if (block_full[blockInd])
+        int state = block_state[blockInd];
+		    if (state & BLOCK_SOLID)
           continue;
 
 		    // Offset at top-left corner
@@ -384,11 +419,19 @@ public:
 		    // Accept whole block when fully covered
 		    if (cb1 >= e[0].nmin && cb2 >= e[1].nmin && cb3 >= e[2].nmin)
 		    {
-			    block_full[blockInd] = 1;
-          solidBlock(offset, cb1, cb2, cb3, e, scale);
+          block_state[blockInd] = BLOCK_SOLID;
+          if (state & BLOCK_NEEDCLEAR)
+            solidBlock<false>(offset, cb1, cb2, cb3, e, scale);
+          else
+            solidBlock<true>(offset, cb1, cb2, cb3, e, scale);
 		    }
 		    else
+        {
+          block_state[blockInd] = state & ~(BLOCK_ISCLEAR | BLOCK_NEEDCLEAR);
+          if (state & BLOCK_NEEDCLEAR)
+            clearBlock(offset);
           partialBlock(offset, cb1, cb2, cb3, e, scale);
+        }
       }
       
       // advance to next row of blocks
