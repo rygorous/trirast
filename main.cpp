@@ -315,12 +315,13 @@ public:
       __m256 us = _mm256_mul_ps(mc1, mscale);
       __m256 vs = _mm256_mul_ps(mc2, mscale);
 
-      // same trick as in solidBlock to build output pixel
+      // similar trick as in solidBlock to build output pixel
       __m256 vround = _mm256_floor_ps(vs);
       __m256 vrscaled = _mm256_mul_ps(vround, _mm256_set1_ps(256.0f));
-      __m256 uv = _mm256_add_ps(us, vrscaled);
-      __m256 pix0 = _mm256_castsi256_ps(_mm256_cvttps_epi32(uv));
-      __m256 pix1 = _mm256_or_ps(pix0, _mm256_castsi256_ps(_mm256_set1_epi32(0xff000000)));
+      __m256 ui = _mm256_castsi256_ps(_mm256_cvttps_epi32(us));
+      __m256 vi = _mm256_castsi256_ps(_mm256_cvttps_epi32(vrscaled));
+      __m256 pix0 = _mm256_or_ps(ui, _mm256_castsi256_ps(_mm256_set1_epi32(0xff000000)));
+      __m256 pix1 = _mm256_or_ps(pix0, vi);
 
       __m256 merged = _mm256_blendv_ps(pix1, curpixel, signs);
       _mm256_store_ps((float *)ptr, merged);
