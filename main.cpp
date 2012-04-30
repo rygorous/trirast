@@ -183,7 +183,7 @@ public:
   };
 
   template<bool masked>
-  void solidBlock(int offset, int c1, int c2, int c3, const SolidSetup &s)
+  __forceinline void solidBlock(int offset, int c1, int c2, int c3, const SolidSetup &s)
   {
     unsigned char *ptr = &data[offset];
     int linestep = canvasStride - blocksize*4;
@@ -250,17 +250,43 @@ public:
 #endif
   }
 
-  void partialBlock(int offset, int c1, int c2, int c3, const Edge *e, float scale)
+  struct PartialSetup
+  {
+    int dy1, dy2, dy3;
+    int dx1, dx2, dx3;
+    float scale;
+#ifdef USE_SIMD
+    __m256 e1_xstep, e2_xstep, e3_xstep;
+    float fdx1, fdx2, fdx3;
+#endif
+
+    void setup(const Edge *e, float scal)
+    {
+      dy1 = e[0].dy; dy2 = e[1].dy; dy3 = e[2].dy;
+      dx1 = e[0].dxline; dx2 = e[1].dxline; dx3 = e[2].dxline;
+      scale = scal;
+#ifdef USE_SIMD
+      fdx1 = (float)e[0].dx;
+      fdx2 = (float)e[1].dx;
+      fdx3 = (float)e[2].dx;
+
+      __m256 mdy1 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[0].dy));
+      __m256 mdy2 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[1].dy));
+      __m256 mdy3 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[2].dy));
+
+      __m256 steps = _mm256_set_ps(7, 6, 5, 4, 3, 2, 1, 0);
+      e1_xstep = _mm256_mul_ps(steps, mdy1);
+      e2_xstep = _mm256_mul_ps(steps, mdy2);
+      e3_xstep = _mm256_mul_ps(steps, mdy3);
+#endif
+    }
+  };
+
+  __forceinline void partialBlock(int offset, int c1, int c2, int c3, const PartialSetup &s)
   {
     unsigned char *ptr = &data[offset];
 
 #ifndef USE_SIMD
-    int pix1 = e[0].dy;
-    int pix2 = e[1].dy;
-    int pix3 = e[2].dy;
-    int line1 = e[0].dxline;
-    int line2 = e[1].dxline;
-    int line3 = e[2].dxline;
     int linestep = canvasStride - blocksize*4;
 
     for (int iy=0; iy < blocksize; iy++)
@@ -269,23 +295,23 @@ public:
       {
         if ((c1 | c2 | c3) >= 0 && !ptr[3])
         {
-          int u = (int)(c1 * scale); // 0-255!
-          int v = (int)(c2 * scale); // 0-255!
+          int u = (int)(c1 * s.scale); // 0-255!
+          int v = (int)(c2 * s.scale); // 0-255!
           ptr[0] = u;
           ptr[1] = v;
           ptr[2] = 0;
           ptr[3] = 255;
         }
 
-        c1 += pix1;
-        c2 += pix2;
-        c3 += pix3;
+        c1 += s.dy1;
+        c2 += s.dy2;
+        c3 += s.dy3;
         ptr += 4;
       }
 
-      c1 += line1;
-      c2 += line2;
-      c3 += line3;
+      c1 += s.dx1;
+      c2 += s.dx2;
+      c3 += s.dx3;
       ptr += linestep;
     }
 #else
@@ -293,19 +319,14 @@ public:
     __m256 mc2 = _mm256_cvtepi32_ps(_mm256_set1_epi32(c2));
     __m256 mc3 = _mm256_cvtepi32_ps(_mm256_set1_epi32(c3));
 
-    __m256 mdx1 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[0].dx));
-    __m256 mdx2 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[1].dx));
-    __m256 mdx3 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[2].dx));
+    mc1 = _mm256_add_ps(mc1, s.e1_xstep);
+    mc2 = _mm256_add_ps(mc2, s.e2_xstep);
+    mc3 = _mm256_add_ps(mc3, s.e3_xstep);
 
-    __m256 mdy1 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[0].dy));
-    __m256 mdy2 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[1].dy));
-    __m256 mdy3 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[2].dy));
-
-    __m256 steps = _mm256_set_ps(7, 6, 5, 4, 3, 2, 1, 0);
-    __m256 mscale = _mm256_broadcast_ss(&scale);
-    mc1 = _mm256_add_ps(mc1, _mm256_mul_ps(steps, mdy1));
-    mc2 = _mm256_add_ps(mc2, _mm256_mul_ps(steps, mdy2));
-    mc3 = _mm256_add_ps(mc3, _mm256_mul_ps(steps, mdy3));
+    __m256 mdx1 = _mm256_broadcast_ss(&s.fdx1);
+    __m256 mdx2 = _mm256_broadcast_ss(&s.fdx2);
+    __m256 mdx3 = _mm256_broadcast_ss(&s.fdx3);
+    __m256 mscale = _mm256_broadcast_ss(&s.scale);
 
     for (int iy=0; iy < blocksize; iy++)
     {
@@ -369,7 +390,9 @@ public:
     // Block setup
     float scale = 255.0f / (e[0].offs + e[1].offs + e[2].offs);
     SolidSetup solid;
+    PartialSetup partial;
     solid.setup(e, scale);
+    partial.setup(e, scale);
 
     // Loop through blocks
     int linestep = canvasStride - q*4;
@@ -440,7 +463,7 @@ public:
           block_state[blockInd] = state & ~(BLOCK_ISCLEAR | BLOCK_NEEDCLEAR);
           if (state & BLOCK_NEEDCLEAR)
             clearBlock(offset);
-          partialBlock(offset, cb1, cb2, cb3, e, scale);
+          partialBlock(offset, cb1, cb2, cb3, partial);
         }
       }
       
