@@ -23,74 +23,74 @@ typedef unsigned int Pixel;
 class CApp {
 private:
   static const int blocklog2 = 3;
-	static const int blocksize = 1 << blocklog2;
-	int canvasWidth;
-	int canvasHeight;
+  static const int blocksize = 1 << blocklog2;
+  int canvasWidth;
+  int canvasHeight;
   int canvasStride;
-	int canvasWBlocks;
-	int canvasHBlocks;
+  int canvasWBlocks;
+  int canvasHBlocks;
   PixelComponent *data;
-	vector<unsigned char> block_state;
+  vector<unsigned char> block_state;
 
   static const int BLOCK_ISCLEAR    = 1 << 0;
   static const int BLOCK_NEEDCLEAR  = 1 << 1;
   static const int BLOCK_SOLID      = 1 << 2;
 
-	static double random()
-	{
-		// Custom random number generator...
-		static unsigned int seed1 = 0x23125253;
-		static unsigned int seed2 = 0x7423e823;
-		seed1 = 36969 * (seed1 & 65535) + (seed1 >> 16);
-		seed2 = 18000 * (seed2 & 65535) + (seed2 >> 16);
-		return (double)((seed1 << 16) + seed2) / (double)0xffffffffU;
-	}
+  static double random()
+  {
+    // Custom random number generator...
+    static unsigned int seed1 = 0x23125253;
+    static unsigned int seed2 = 0x7423e823;
+    seed1 = 36969 * (seed1 & 65535) + (seed1 >> 16);
+    seed2 = 18000 * (seed2 & 65535) + (seed2 >> 16);
+    return (double)((seed1 << 16) + seed2) / (double)0xffffffffU;
+  }
 
 
 public:
-	CApp()
-	{
-		canvasWidth = 1024;
-		canvasHeight = 512;
+  CApp()
+  {
+    canvasWidth = 1024;
+    canvasHeight = 512;
     canvasStride = ((canvasWidth + 3) & ~3) * 4; // in bytes!
     data = (PixelComponent *)_aligned_malloc(canvasStride * canvasHeight, 16);
     memset(data, 0, canvasStride * canvasHeight);
 
-		canvasWBlocks = (canvasWidth + blocksize-1) / blocksize;
-		canvasHBlocks = (canvasHeight + blocksize-1) / blocksize;
-		block_state.resize(canvasWBlocks * canvasHBlocks);
+    canvasWBlocks = (canvasWidth + blocksize-1) / blocksize;
+    canvasHBlocks = (canvasHeight + blocksize-1) / blocksize;
+    block_state.resize(canvasWBlocks * canvasHBlocks);
     memset(&block_state[0], BLOCK_ISCLEAR, block_state.size());
-	}
+  }
 
   ~CApp()
   {
     _aligned_free(data);
   }
 
-	void render()
-	{
+  void render()
+  {
     // set block state for clearing
     for (int i=0; i < block_state.size(); i++)
       block_state[i] = (block_state[i] & BLOCK_ISCLEAR) ? BLOCK_ISCLEAR : BLOCK_NEEDCLEAR;
 
-		// Draw 1000 triangles
-		for (int i = 0; i < 100; i++) {
-			drawTriangle(
-						random() * canvasWidth,
-						random() * canvasHeight,
-						(Pixel)(random() * 0xffffff),
-						random() * canvasWidth,
-						random() * canvasHeight,
-						(Pixel)(random() * 0xffffff),
-						random() * canvasWidth,
-						random() * canvasHeight,
-						(Pixel)(random() * 0xffffff)
-						);
-		}
+    // Draw 1000 triangles
+    for (int i = 0; i < 100; i++) {
+      drawTriangle(
+            random() * canvasWidth,
+            random() * canvasHeight,
+            (Pixel)(random() * 0xffffff),
+            random() * canvasWidth,
+            random() * canvasHeight,
+            (Pixel)(random() * 0xffffff),
+            random() * canvasWidth,
+            random() * canvasHeight,
+            (Pixel)(random() * 0xffffff)
+            );
+    }
 
     // clear remaining blocks that need clearing
     performClear();
-	}
+  }
 
   void performClear()
   {
@@ -128,8 +128,8 @@ public:
 
       // min/max corners
       nmin = nmax = 0;
-  		if (dx >= 0) nmax -= dx; else nmin -= dx;
-  		if (dy >= 0) nmax -= dy; else nmin -= dy;
+      if (dx >= 0) nmax -= dx; else nmin -= dx;
+      if (dy >= 0) nmax -= dy; else nmin -= dy;
       nmin *= block-1;
       nmax *= block-1;
     }
@@ -184,27 +184,27 @@ public:
     int linestep = canvasStride - blocksize*4;
 
 #ifndef USE_SIMD
-		for ( int iy = 0; iy < blocksize; iy ++ )
-		{
-			for ( int ix = 0; ix < blocksize; ix ++ )
-			{
-				if (!masked || !ptr[3])
-				{
-					ptr[0] = u >> 16;
-					ptr[1] = v >> 16;
-					ptr[2] = 0;
-					ptr[3] = 255;
-				}
+    for ( int iy = 0; iy < blocksize; iy ++ )
+    {
+      for ( int ix = 0; ix < blocksize; ix ++ )
+      {
+        if (!masked || !ptr[3])
+        {
+          ptr[0] = u >> 16;
+          ptr[1] = v >> 16;
+          ptr[2] = 0;
+          ptr[3] = 255;
+        }
 
         u += s.dudx;
         v += s.dvdx;
         ptr += 4;
-			}
+      }
 
       u += s.dudy;
       v += s.dvdy;
-			ptr += linestep;
-		}
+      ptr += linestep;
+    }
 #else
     __m128i mu = _mm_add_epi32(_mm_set1_epi32(u), s.mu_initstep);
     __m128i mv = _mm_add_epi32(_mm_set1_epi32(v), s.mv_initstep);
@@ -260,19 +260,19 @@ public:
     unsigned char *ptr = &data[offset];
     int linestep = canvasStride - blocksize*4;
 
-#if 0
+#ifndef USE_SIMD
     for (int iy=0; iy < blocksize; iy++)
     {
       for (int ix=0; ix < blocksize; ix++)
       {
         if ((c1 | c2 | c3) >= 0 && !ptr[3])
         {
-					int u = (int)(c1 * scale); // 0-255!
-					int v = (int)(c2 * scale); // 0-255!
-					ptr[0] = u;
-					ptr[1] = v;
-					ptr[2] = 0;
-					ptr[3] = 255;
+          int u = (int)(c1 * scale); // 0-255!
+          int v = (int)(c2 * scale); // 0-255!
+          ptr[0] = u;
+          ptr[1] = v;
+          ptr[2] = 0;
+          ptr[3] = 255;
         }
 
         c1 += pix1;
@@ -354,31 +354,31 @@ public:
 #endif
   }
 
-	void drawTriangle( double ax1, double ay1, Pixel color1, double ax2, double ay2, Pixel color2, double ax3, double ay3, Pixel color3 )
-	{
-		// http://devmaster.net/forums/topic/1145-advanced-rasterization/
+  void drawTriangle( double ax1, double ay1, Pixel color1, double ax2, double ay2, Pixel color2, double ax3, double ay3, Pixel color3 )
+  {
+    // http://devmaster.net/forums/topic/1145-advanced-rasterization/
 
-		// 28.4 fixed-point coordinates
-		int x1 = (int)( 16.0 * ax1 + 0.5 );
-		int x2 = (int)( 16.0 * ax2 + 0.5 );
-		int x3 = (int)( 16.0 * ax3 + 0.5 );
+    // 28.4 fixed-point coordinates
+    int x1 = (int)( 16.0 * ax1 + 0.5 );
+    int x2 = (int)( 16.0 * ax2 + 0.5 );
+    int x3 = (int)( 16.0 * ax3 + 0.5 );
 
-		int y1 = (int)( 16.0 * ay1 + 0.5 );
-		int y2 = (int)( 16.0 * ay2 + 0.5 );
-		int y3 = (int)( 16.0 * ay3 + 0.5 );
+    int y1 = (int)( 16.0 * ay1 + 0.5 );
+    int y2 = (int)( 16.0 * ay2 + 0.5 );
+    int y3 = (int)( 16.0 * ay3 + 0.5 );
 
-		// Bounding rectangle
-		int minx = MAX( ( MIN( x1, MIN ( x2, x3 ) ) + 0xf ) >> 4, 0 );
-		int maxx = MIN( ( MAX( x1, MAX ( x2, x3 ) ) + 0xf ) >> 4, canvasWidth );
-		int miny = MAX( ( MIN( y1, MIN ( y2, y3 ) ) + 0xf ) >> 4, 0 );
-		int maxy = MIN( ( MAX( y1, MAX ( y2, y3 ) ) + 0xf ) >> 4, canvasHeight );
+    // Bounding rectangle
+    int minx = MAX( ( MIN( x1, MIN ( x2, x3 ) ) + 0xf ) >> 4, 0 );
+    int maxx = MIN( ( MAX( x1, MAX ( x2, x3 ) ) + 0xf ) >> 4, canvasWidth );
+    int miny = MAX( ( MIN( y1, MIN ( y2, y3 ) ) + 0xf ) >> 4, 0 );
+    int maxy = MIN( ( MAX( y1, MAX ( y2, y3 ) ) + 0xf ) >> 4, canvasHeight );
 
-		// Block size, standard 8x8 (must be power of two)
-		int q = blocksize;
+    // Block size, standard 8x8 (must be power of two)
+    int q = blocksize;
 
-		// Start in corner of 8x8 block
-		minx &= ~(q - 1);
-		miny &= ~(q - 1);
+    // Start in corner of 8x8 block
+    minx &= ~(q - 1);
+    miny &= ~(q - 1);
 
     // Edges
     Edge e[3];
@@ -387,13 +387,13 @@ public:
     e[2].setup(x3, y3, x1, y1, minx << 4, miny << 4, q);
 
     // Block setup
-		float scale = 255.0f / (e[0].offs + e[1].offs + e[2].offs);
+    float scale = 255.0f / (e[0].offs + e[1].offs + e[2].offs);
     SolidSetup solid;
     solid.setup(e, scale);
 
-		// Loop through blocks
-		int linestep = canvasStride - q*4;
-
+    // Loop through blocks
+    int linestep = canvasStride - q*4;
+    int blockyind = (miny >> blocklog2) * canvasWBlocks;
     int cb1 = e[0].offs;
     int cb2 = e[1].offs;
     int cb3 = e[2].offs;
@@ -438,26 +438,24 @@ public:
         if (cb3 < e[2].nmax) if (e3x < 0) break; else continue;
 
         // We can skip this block if it's already fully covered
-		    int blockX = (x0 / q);
-		    int blockY = (y0 / q);
-		    int blockInd = blockX + blockY * canvasWBlocks;
+        int blockInd = blockyind + (x0 >> blocklog2);
         int state = block_state[blockInd];
-		    if (state & BLOCK_SOLID)
+        if (state & BLOCK_SOLID)
           continue;
 
-		    // Offset at top-left corner
-		    int offset = x0*4 + y0*canvasStride;
+        // Offset at top-left corner
+        int offset = x0*4 + y0*canvasStride;
 
-		    // Accept whole block when fully covered
-		    if (cb1 >= e[0].nmin && cb2 >= e[1].nmin && cb3 >= e[2].nmin)
-		    {
+        // Accept whole block when fully covered
+        if (cb1 >= e[0].nmin && cb2 >= e[1].nmin && cb3 >= e[2].nmin)
+        {
           block_state[blockInd] = BLOCK_SOLID;
           if (state & BLOCK_NEEDCLEAR)
             solidBlock<false>(offset, cb1, cb2, cb3, solid);
           else
             solidBlock<true>(offset, cb1, cb2, cb3, solid);
-		    }
-		    else
+        }
+        else
         {
           block_state[blockInd] = state & ~(BLOCK_ISCLEAR | BLOCK_NEEDCLEAR);
           if (state & BLOCK_NEEDCLEAR)
@@ -470,50 +468,51 @@ public:
       cb1 += q*e[0].dx;
       cb2 += q*e[1].dx;
       cb3 += q*e[2].dx;
+      blockyind += canvasWBlocks;
     }
-	}
+  }
 
-	void saveAsTGA(const char* fileName)
-	{
-		// Construct a TGA file header (18 bytes)
-		unsigned char hdr[18];
-		memset(hdr, 0, 18);
-		hdr[2] = 2;     // True color
-		hdr[12] = canvasWidth & 255;
-		hdr[13] = canvasWidth >> 8;
-		hdr[14] = canvasHeight & 255;
-		hdr[15] = canvasHeight >> 8;
-		hdr[16] = 32;   // 32 bpp
+  void saveAsTGA(const char* fileName)
+  {
+    // Construct a TGA file header (18 bytes)
+    unsigned char hdr[18];
+    memset(hdr, 0, 18);
+    hdr[2] = 2;     // True color
+    hdr[12] = canvasWidth & 255;
+    hdr[13] = canvasWidth >> 8;
+    hdr[14] = canvasHeight & 255;
+    hdr[15] = canvasHeight >> 8;
+    hdr[16] = 32;   // 32 bpp
 
-		// Write file
-		ofstream of(fileName, ios_base::out | ios_base::binary);
-		of.write((const char*)hdr, 18);
+    // Write file
+    ofstream of(fileName, ios_base::out | ios_base::binary);
+    of.write((const char*)hdr, 18);
     for (int i=0; i < canvasHeight; i++)
-		  of.write((const char*)&data[i*canvasStride], canvasWidth*4);
-		of.close();
-	}
+      of.write((const char*)&data[i*canvasStride], canvasWidth*4);
+    of.close();
+  }
 };
 
 int main()
 {
-  static const int nFrames = 500;
+  static const int nFrames = 10000;
 
-	CApp app;
+  CApp app;
 
   LARGE_INTEGER tstart, tend, freq;
   QueryPerformanceFrequency(&freq);
   QueryPerformanceCounter(&tstart);
 
-	// Benchmark the renderer
-	for ( int i = 0; i < nFrames; i++ )
-	{
-		app.render();
-	}
+  // Benchmark the renderer
+  for ( int i = 0; i < nFrames; i++ )
+  {
+    app.render();
+  }
 
   QueryPerformanceCounter(&tend);
   printf("%.3fms / frame\n", 1000.0 * (tend.QuadPart - tstart.QuadPart) / (nFrames * freq.QuadPart));
 
   app.saveAsTGA("test.tga");
 
-	return 0;
+  return 0;
 }
