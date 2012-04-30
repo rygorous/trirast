@@ -53,7 +53,8 @@ public:
     canvasWidth = 1024;
     canvasHeight = 512;
     canvasStride = ((canvasWidth + 3) & ~3) * 4; // in bytes!
-    data = (PixelComponent *)_aligned_malloc(canvasStride * canvasHeight, 16);
+    canvasStride += 64; // increase stride to improve spread across cache sets
+    data = (PixelComponent *)_aligned_malloc(canvasStride * canvasHeight, 64);
     memset(data, 0, canvasStride * canvasHeight);
 
     canvasWBlocks = (canvasWidth + blocksize-1) / blocksize;
