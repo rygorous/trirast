@@ -139,9 +139,11 @@ public:
   void clearBlock(int offset)
   {
     unsigned char *ptr = &data[offset];
+    __m256i zero = _mm256_setzero_si256();
+
     for (int iy=0; iy < blocksize; iy++)
     {
-      memset(ptr, 0, blocksize*4);
+      _mm256_store_si256((__m256i*)ptr, zero);
       ptr += canvasStride;
     }
   }
@@ -227,9 +229,8 @@ public:
         if (masked)
         {
           __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
-          __m128i mskip = _mm_srai_epi32(curpixel, 31); // alpha >= 128
-          __m128i merged = _mm_blendv_epi8(pix1, curpixel, mskip);
-          _mm_store_si128((__m128i *)ptr, merged);
+          __m128 merged = _mm_blendv_ps(_mm_castsi128_ps(pix1), _mm_castsi128_ps(curpixel), _mm_castsi128_ps(curpixel));
+          _mm_store_ps((float *)ptr, merged);
         }
         else
           _mm_store_si128((__m128i *)ptr, pix1);
@@ -318,7 +319,6 @@ public:
       {
         __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
         __m128i csigns = _mm_or_si128(_mm_castps_si128(_mm_or_ps(mc1f, mc2f)), _mm_or_si128(mc3, curpixel));
-        __m128i mskip = _mm_srai_epi32(csigns, 31);
 
         __m128 c1fs = _mm_mul_ps(mc1f, mscale);
         __m128 c2fs = _mm_mul_ps(mc2f, mscale);
@@ -328,8 +328,8 @@ public:
         __m128i pix0 = _mm_or_si128(mu, _mm_slli_epi32(mv, 8));
         __m128i pix1 = _mm_or_si128(pix0, _mm_set1_epi32(0xff000000));
 
-        __m128i merged = _mm_blendv_epi8(pix1, curpixel, mskip);
-        _mm_store_si128((__m128i *)ptr, merged);
+        __m128 merged = _mm_blendv_ps(_mm_castsi128_ps(pix1), _mm_castsi128_ps(curpixel), _mm_castsi128_ps(csigns));
+        _mm_store_ps((float *)ptr, merged);
 
         mc1f = _mm_add_ps(mc1f, mpix1f);
         mc2f = _mm_add_ps(mc2f, mpix2f);
