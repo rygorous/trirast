@@ -228,7 +228,7 @@ public:
     {
       // okay, this one is a bit weird. we don't have access to AVX2 (integer) intrinsics, so
       // we build the (ARGB888) color using floats. ugh.
-      __m256 vround = _mm256_ceil_ps(mv);
+      __m256 vround = _mm256_floor_ps(mv);
       __m256 vrscaled = _mm256_mul_ps(vround, _mm256_set1_ps(256.0f));
       __m256 uv = _mm256_add_ps(mu, vrscaled);
       __m256i pix0 = _mm256_cvttps_epi32(uv);
@@ -252,16 +252,17 @@ public:
 
   void partialBlock(int offset, int c1, int c2, int c3, const Edge *e, float scale)
   {
+    unsigned char *ptr = &data[offset];
+
+#ifndef USE_SIMD
     int pix1 = e[0].dy;
     int pix2 = e[1].dy;
     int pix3 = e[2].dy;
     int line1 = e[0].dxline;
     int line2 = e[1].dxline;
     int line3 = e[2].dxline;
-    unsigned char *ptr = &data[offset];
     int linestep = canvasStride - blocksize*4;
 
-#ifndef USE_SIMD
     for (int iy=0; iy < blocksize; iy++)
     {
       for (int ix=0; ix < blocksize; ix++)
@@ -288,62 +289,46 @@ public:
       ptr += linestep;
     }
 #else
-    __m128i mc1 = _mm_set1_epi32(c1);
-    __m128i mc2 = _mm_set1_epi32(c2);
-    __m128i mc3 = _mm_set1_epi32(c3);
-    __m128i mpix1 = _mm_set1_epi32(pix1);
-    __m128i mpix2 = _mm_set1_epi32(pix2);
-    __m128i mpix3 = _mm_set1_epi32(pix3);
-    __m128i mline1 = _mm_set1_epi32(line1);
-    __m128i mline2 = _mm_set1_epi32(line2);
-    __m128i mline3 = _mm_set1_epi32(line3);
+    __m256 mc1 = _mm256_cvtepi32_ps(_mm256_set1_epi32(c1));
+    __m256 mc2 = _mm256_cvtepi32_ps(_mm256_set1_epi32(c2));
+    __m256 mc3 = _mm256_cvtepi32_ps(_mm256_set1_epi32(c3));
 
-    __m128i step0123 = _mm_set_epi32(3, 2, 1, 0);
-    mc1 = _mm_add_epi32(mc1, _mm_mullo_epi32(mpix1, step0123));
-    mc2 = _mm_add_epi32(mc2, _mm_mullo_epi32(mpix2, step0123));
-    mc3 = _mm_add_epi32(mc3, _mm_mullo_epi32(mpix3, step0123));
-    mpix1 = _mm_slli_epi32(mpix1, 2);
-    mpix2 = _mm_slli_epi32(mpix2, 2);
-    mpix3 = _mm_slli_epi32(mpix3, 2);
+    __m256 mdx1 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[0].dx));
+    __m256 mdx2 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[1].dx));
+    __m256 mdx3 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[2].dx));
 
-    // we can convert these to floating point. this is exact for fairly subtle reasons.
-    __m128 mc1f = _mm_cvtepi32_ps(mc1);
-    __m128 mc2f = _mm_cvtepi32_ps(mc2);
-    __m128 mpix1f = _mm_cvtepi32_ps(mpix1);
-    __m128 mpix2f = _mm_cvtepi32_ps(mpix2);
-    __m128 mline1f = _mm_cvtepi32_ps(mline1);
-    __m128 mline2f = _mm_cvtepi32_ps(mline2);
+    __m256 mdy1 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[0].dy));
+    __m256 mdy2 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[1].dy));
+    __m256 mdy3 = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[2].dy));
 
-    __m128 mscale = _mm_set1_ps(scale);
+    __m256 steps = _mm256_set_ps(7, 6, 5, 4, 3, 2, 1, 0);
+    __m256 mscale = _mm256_broadcast_ss(&scale);
+    mc1 = _mm256_add_ps(mc1, _mm256_mul_ps(steps, mdy1));
+    mc2 = _mm256_add_ps(mc2, _mm256_mul_ps(steps, mdy2));
+    mc3 = _mm256_add_ps(mc3, _mm256_mul_ps(steps, mdy3));
 
     for (int iy=0; iy < blocksize; iy++)
     {
-      for (int ix=0; ix < blocksize/4; ix++)
-      {
-        __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
-        __m128i csigns = _mm_or_si128(_mm_castps_si128(_mm_or_ps(mc1f, mc2f)), _mm_or_si128(mc3, curpixel));
+      __m256 curpixel = _mm256_load_ps((const float*)ptr);
+      __m256 signs = _mm256_or_ps(_mm256_or_ps(mc1, mc2), _mm256_or_ps(mc3, curpixel));
 
-        __m128 c1fs = _mm_mul_ps(mc1f, mscale);
-        __m128 c2fs = _mm_mul_ps(mc2f, mscale);
-        __m128i mu = _mm_cvttps_epi32(c1fs);
-        __m128i mv = _mm_cvttps_epi32(c2fs);
+      __m256 us = _mm256_mul_ps(mc1, mscale);
+      __m256 vs = _mm256_mul_ps(mc2, mscale);
 
-        __m128i pix0 = _mm_or_si128(mu, _mm_slli_epi32(mv, 8));
-        __m128i pix1 = _mm_or_si128(pix0, _mm_set1_epi32(0xff000000));
+      // same trick as in solidBlock to build output pixel
+      __m256 vround = _mm256_floor_ps(vs);
+      __m256 vrscaled = _mm256_mul_ps(vround, _mm256_set1_ps(256.0f));
+      __m256 uv = _mm256_add_ps(us, vrscaled);
+      __m256 pix0 = _mm256_castsi256_ps(_mm256_cvttps_epi32(uv));
+      __m256 pix1 = _mm256_or_ps(pix0, _mm256_castsi256_ps(_mm256_set1_epi32(0xff000000)));
 
-        __m128 merged = _mm_blendv_ps(_mm_castsi128_ps(pix1), _mm_castsi128_ps(curpixel), _mm_castsi128_ps(csigns));
-        _mm_store_ps((float *)ptr, merged);
+      __m256 merged = _mm256_blendv_ps(pix1, curpixel, signs);
+      _mm256_store_ps((float *)ptr, merged);
 
-        mc1f = _mm_add_ps(mc1f, mpix1f);
-        mc2f = _mm_add_ps(mc2f, mpix2f);
-        mc3 = _mm_add_epi32(mc3, mpix3);
-        ptr += 4*4;
-      }
-
-      mc1f = _mm_add_ps(mc1f, mline1f);
-      mc2f = _mm_add_ps(mc2f, mline2f);
-      mc3 = _mm_add_epi32(mc3, mline3);
-      ptr += linestep;
+      mc1 = _mm256_add_ps(mc1, mdx1);
+      mc2 = _mm256_add_ps(mc2, mdx2);
+      mc3 = _mm256_add_ps(mc3, mdx3);
+      ptr += canvasStride;
     }
 #endif
   }
