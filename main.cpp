@@ -6,7 +6,7 @@
 #include <iostream>
 #include <fstream>
 
-#include <xmmintrin.h>
+#include <immintrin.h>
 
 #include <Windows.h>
 
@@ -229,9 +229,7 @@ public:
           __m128i curalpha = _mm_srli_epi32(curpixel, 24); // alpha only
           __m128i mwrite = _mm_cmpeq_epi32(curalpha, _mm_setzero_si128());
 
-          __m128i merge0 = _mm_and_si128(pix1, mwrite);
-          __m128i merge1 = _mm_andnot_si128(mwrite, curpixel);
-          __m128i merged = _mm_or_si128(merge0, merge1);
+          __m128i merged = _mm_blendv_epi8(curpixel, pix1, mwrite);
           _mm_store_si128((__m128i *)ptr, merged);
         }
         else
@@ -335,9 +333,7 @@ public:
         __m128i pix0 = _mm_or_si128(mu, _mm_slli_epi32(mv, 8));
         __m128i pix1 = _mm_or_si128(pix0, _mm_set1_epi32(0xff000000));
 
-        __m128i merge0 = _mm_and_si128(pix1, mwrite);
-        __m128i merge1 = _mm_andnot_si128(mwrite, curpixel);
-        __m128i merged = _mm_or_si128(merge0, merge1);
+        __m128i merged = _mm_blendv_epi8(curpixel, pix1, mwrite);
         _mm_store_si128((__m128i *)ptr, merged);
 
         mc1f = _mm_add_ps(mc1f, mpix1f);
@@ -495,7 +491,7 @@ public:
 
 int main()
 {
-  static const int nFrames = 10000;
+  static const int nFrames = 500;
 
   CApp app;
 
