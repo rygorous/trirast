@@ -154,26 +154,30 @@ public:
     int dudx, dudy;
     int dvdx, dvdy;
 #ifdef USE_SIMD
-    __m128i mu_initstep, mv_initstep;
-    __m128i deltas;
+    float scale;
+    float fdudy, fdvdy;
+    __m256 mu_xstep, mv_xstep;
 #endif
 
-    void setup(const Edge *e, float scale)
+    void setup(const Edge *e, float scal)
     {
-      fixscale = scale * 65536;
+      fixscale = scal * 65536;
       dudx = (int) (e[0].dy * fixscale);
       dudy = (int) (e[0].dxline * fixscale);
       dvdx = (int) (e[1].dy * fixscale);
       dvdy = (int) (e[1].dxline * fixscale);
 
 #ifdef USE_SIMD
-      __m128i step0123 = _mm_set_epi32(3, 2, 1, 0);
-      mu_initstep = _mm_mullo_epi32(step0123, _mm_set1_epi32(dudx));
-      mv_initstep = _mm_mullo_epi32(step0123, _mm_set1_epi32(dvdx));
-      deltas.m128i_i32[0] = dudx << 2;
-      deltas.m128i_i32[1] = dvdx << 2;
-      deltas.m128i_i32[2] = dudy;
-      deltas.m128i_i32[3] = dvdy;
+      scale = scal;
+      fdudy = e[0].dx * scale;
+      fdvdy = e[1].dx * scale;
+
+      __m256 e0dy = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[0].dy));
+      __m256 e1dy = _mm256_cvtepi32_ps(_mm256_set1_epi32(e[1].dy));
+      __m256 steps = _mm256_set_ps(7, 6, 5, 4, 3, 2, 1, 0);
+      steps = _mm256_mul_ps(steps, _mm256_broadcast_ss(&scale));
+      mu_xstep = _mm256_mul_ps(e0dy, steps);
+      mv_xstep = _mm256_mul_ps(e1dy, steps);
 #endif
     }
   };
@@ -181,12 +185,13 @@ public:
   template<bool masked>
   void solidBlock(int offset, int c1, int c2, int c3, const SolidSetup &s)
   {
-    int u = (int) (c1 * s.fixscale);
-    int v = (int) (c2 * s.fixscale);
     unsigned char *ptr = &data[offset];
     int linestep = canvasStride - blocksize*4;
 
 #ifndef USE_SIMD
+    int u = (int) (c1 * s.fixscale);
+    int v = (int) (c2 * s.fixscale);
+
     for ( int iy = 0; iy < blocksize; iy ++ )
     {
       for ( int ix = 0; ix < blocksize; ix ++ )
@@ -209,40 +214,38 @@ public:
       ptr += linestep;
     }
 #else
-    __m128i mu = _mm_add_epi32(_mm_set1_epi32(u), s.mu_initstep);
-    __m128i mv = _mm_add_epi32(_mm_set1_epi32(v), s.mv_initstep);
-    __m128i mdudx = _mm_shuffle_epi32(s.deltas, 0x00);
-    __m128i mdvdx = _mm_shuffle_epi32(s.deltas, 0x55);
-    __m128i mdudy = _mm_shuffle_epi32(s.deltas, 0xaa);
-    __m128i mdvdy = _mm_shuffle_epi32(s.deltas, 0xff);
+    __m256 mu = _mm256_cvtepi32_ps(_mm256_set1_epi32(c1));
+    __m256 mv = _mm256_cvtepi32_ps(_mm256_set1_epi32(c2));
+    __m256 mscale = _mm256_broadcast_ss(&s.scale);
+    mu = _mm256_mul_ps(mu, mscale);
+    mv = _mm256_mul_ps(mv, mscale);
+    mu = _mm256_add_ps(mu, s.mu_xstep);
+    mv = _mm256_add_ps(mv, s.mv_xstep);
+    __m256 mdudy = _mm256_broadcast_ss(&s.fdudy);
+    __m256 mdvdy = _mm256_broadcast_ss(&s.fdvdy);
 
     for (int iy=0; iy < blocksize; iy++)
     {
-      for (int ix=0; ix < blocksize/4; ix++)
+      // okay, this one is a bit weird. we don't have access to AVX2 (integer) intrinsics, so
+      // we build the (ARGB888) color using floats. ugh.
+      __m256 vround = _mm256_ceil_ps(mv);
+      __m256 vrscaled = _mm256_mul_ps(vround, _mm256_set1_ps(256.0f));
+      __m256 uv = _mm256_add_ps(mu, vrscaled);
+      __m256i pix0 = _mm256_cvttps_epi32(uv);
+      __m256 pix1 = _mm256_or_ps(_mm256_castsi256_ps(pix0), _mm256_castsi256_ps(_mm256_set1_epi32(0xff000000)));
+
+      if (masked)
       {
-        __m128i ushift = _mm_srli_epi32(mu, 16);
-        __m128i vshift = _mm_srli_epi32(mv, 16);
-
-        __m128i pix0 = _mm_or_si128(ushift, _mm_slli_epi32(vshift, 8));
-        __m128i pix1 = _mm_or_si128(pix0, _mm_set1_epi32(0xff000000));
-
-        if (masked)
-        {
-          __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
-          __m128 merged = _mm_blendv_ps(_mm_castsi128_ps(pix1), _mm_castsi128_ps(curpixel), _mm_castsi128_ps(curpixel));
-          _mm_store_ps((float *)ptr, merged);
-        }
-        else
-          _mm_store_si128((__m128i *)ptr, pix1);
-
-        mu = _mm_add_epi32(mu, mdudx);
-        mv = _mm_add_epi32(mv, mdvdx);
-        ptr += 4*4;
+        __m256 curpixel = _mm256_load_ps((const float*)ptr);
+        __m256 merged = _mm256_blendv_ps(pix1, curpixel, curpixel);
+        _mm256_store_ps((float *)ptr, merged);
       }
+      else
+        _mm256_store_ps((float *)ptr, pix1);
 
-      mu = _mm_add_epi32(mu, mdudy);
-      mv = _mm_add_epi32(mv, mdvdy);
-      ptr += linestep;
+      mu = _mm256_add_ps(mu, mdudy);
+      mv = _mm256_add_ps(mv, mdvdy);
+      ptr += canvasStride;
     }
 #endif
   }
