@@ -226,10 +226,8 @@ public:
         if (masked)
         {
           __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
-          __m128i curalpha = _mm_srli_epi32(curpixel, 24); // alpha only
-          __m128i mwrite = _mm_cmpeq_epi32(curalpha, _mm_setzero_si128());
-
-          __m128i merged = _mm_blendv_epi8(curpixel, pix1, mwrite);
+          __m128i mskip = _mm_srai_epi32(curpixel, 31); // alpha >= 128
+          __m128i merged = _mm_blendv_epi8(pix1, curpixel, mskip);
           _mm_store_si128((__m128i *)ptr, merged);
         }
         else
@@ -318,12 +316,8 @@ public:
       for (int ix=0; ix < blocksize/4; ix++)
       {
         __m128i curpixel = _mm_load_si128((const __m128i*)ptr);
-        __m128i curalpha = _mm_srli_epi32(curpixel, 24);
-        __m128i mwrite = _mm_cmpeq_epi32(curalpha, _mm_setzero_si128());
-
-        __m128i csigns = _mm_or_si128(_mm_castps_si128(_mm_or_ps(mc1f, mc2f)), mc3);
-        mwrite = _mm_andnot_si128(csigns, mwrite);
-        mwrite = _mm_srai_epi32(mwrite, 31);
+        __m128i csigns = _mm_or_si128(_mm_castps_si128(_mm_or_ps(mc1f, mc2f)), _mm_or_si128(mc3, curpixel));
+        __m128i mskip = _mm_srai_epi32(csigns, 31);
 
         __m128 c1fs = _mm_mul_ps(mc1f, mscale);
         __m128 c2fs = _mm_mul_ps(mc2f, mscale);
@@ -333,7 +327,7 @@ public:
         __m128i pix0 = _mm_or_si128(mu, _mm_slli_epi32(mv, 8));
         __m128i pix1 = _mm_or_si128(pix0, _mm_set1_epi32(0xff000000));
 
-        __m128i merged = _mm_blendv_epi8(curpixel, pix1, mwrite);
+        __m128i merged = _mm_blendv_epi8(pix1, curpixel, mskip);
         _mm_store_si128((__m128i *)ptr, merged);
 
         mc1f = _mm_add_ps(mc1f, mpix1f);
