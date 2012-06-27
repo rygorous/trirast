@@ -75,7 +75,7 @@ public:
       block_state[i] = (block_state[i] & BLOCK_ISCLEAR) ? BLOCK_ISCLEAR : BLOCK_NEEDCLEAR;
 
     // Draw 1000 triangles
-    for (int i = 0; i < 100; i++) {
+    for (int i = 0; i < 1000; i++) {
       drawTriangle(
             random() * canvasWidth,
             random() * canvasHeight,
